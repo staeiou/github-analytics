@@ -1,28 +1,70 @@
-def get_org_contributor_locations(github, org_name):
+import github
+from geopy.geocoders import Nominatim
+import ipywidgets
+
+from ipyleaflet import (
+    Map,
+    Marker,
+    TileLayer, ImageOverlay,
+    Polyline, Polygon, Rectangle, Circle, CircleMarker,
+    GeoJSON,
+    DrawControl
+)
+
+def handle_org_name_or_object(github_obj, org_name_or_object):
+    import github
+    if isinstance(org_name_or_object, github.Organization.Organization):
+        org = org_name_or_object
+    elif isinstance(org_name_or_object, str):
+        org = github_obj.get_organization(org_name_or_object)
+    else:
+        error_str = "Must pass a github object or string. Passed a(n) " + str(type(org_name_or_object))
+        assert False, error_str
+
+    return org    
+
+def get_org_contributor_locations(github_obj, org_name_or_object, debug=1):
     """
     For a GitHub organization, get location for contributors to any repo in the org.
     
     Returns a dictionary of {username URLS : geopy Locations}, then a dictionary of various metadata.
+
+    Debug levels: 0 is quiet, 1 (default) is one character per contributor, 0 is full locations & errors
     
     """
     
+    # Check to see if the org object is a github Org from the API or a string.
+
+    # org = handle_org_name_or_object(github, org_name_or_object)
+
+    import github
+    if isinstance(org_name_or_object, github.Organization.Organization):
+        org = org_name_or_object
+    elif isinstance(org_name_or_object, str):
+        org = github_obj.get_organization(org_name_or_object)
+    else:
+        error_str = "Must pass a github object or string. Passed a(n) " + str(type(org_name_or_object))
+        assert False, error_str
+
     # Set up empty dictionaries and metadata variables
     contributor_locs = {}
     locations = []
-    none_count = 0
-    error_count = 0
-    user_loc_count = 0
-    duplicate_count = 0
+    metadata_dict = {'no_loc_count':0, 'user_loc_count':0, 
+                    'duplicate_count':0, 'error_count':0}
+
+    # Instantiate geolocator api
     geolocator = Nominatim()
 
-    
     # For each repo in the organization
-    for repo in github.get_organization(org_name).get_repos():
+    for repo in org.get_repos():
         #print(repo.name)
         
         # For each contributor in the repo        
         for contributor in repo.get_contributors():
-            print('.', end="")
+            if debug == 1:
+                print('.', end="")
+            elif debug == 2:
+                print(contributor.location)
             # If the contributor_locs dictionary doesn't have an entry for this user
             if contributor_locs.get(contributor.url) is None:
                 
@@ -31,24 +73,27 @@ def get_org_contributor_locations(github, org_name):
                     # If the contributor has no location in profile
                     if(contributor.location is None):
                         #print("No Location")
-                        none_count += 1
+                        metadata_dict['no_loc_count'] += 1
                     else:
                         # Get coordinates for location string from Nominatim API
                         location=geolocator.geocode(contributor.location)
 
                         #print(contributor.location, " | ", location)
                         
-                        # Add a new entry to the dictionary. Value is user's URL, key is geocoded location object
+                        # Add a new entry to the dictionary. 
+                        # Value is user's URL, key is geocoded location object
                         contributor_locs[contributor.url] = location
-                        user_loc_count += 1
-                except Exception:
-                    print('!', end="")
-                    error_count += 1
+                        metadata_dict['user_loc_count'] += 1
+                except Exception as e:
+                    if debug == 1:
+                        print('!', end="")
+                    elif debug == 2:
+                        print("ERROR:", e)
+                    metadata_dict['error_count'] += 1
             else:
-                duplicate_count += 1
+                metadata_dict['duplicate_count'] += 1
                 
-    return contributor_locs,{'no_loc_count':none_count, 'user_loc_count':user_loc_count, 
-                             'duplicate_count':duplicate_count, 'error_count':error_count}
+    return contributor_locs,metadata_dict
 
 
 def map_location_dict(map_obj,org_location_dict):
@@ -66,7 +111,6 @@ def map_location_dict(map_obj,org_location_dict):
             
 
     return map_obj
-
 
 
 def org_dict_to_csv(org_location_dict, filename, hashed_usernames = True):
@@ -99,8 +143,9 @@ def org_dict_to_csv(org_location_dict, filename, hashed_usernames = True):
 
 def csv_to_js_var(input_file, output_file):
     """
-    Reads a csv file (outputted with previous function) and writes to 
-    Javascript variables in a .js file.
+    Converts a CSV file to a Javascript file with one long list variable.
+
+    CSV file must be in the format of: point info, longitude, latitude
 
     """
     import pandas as pd
@@ -110,8 +155,8 @@ def csv_to_js_var(input_file, output_file):
     dct = df.to_dict()
 
     with open(output_file,'w') as f:
-        f.write('var addressPoints = '+json.dumps([[ll,l,u] for u,l,ll in zip(dct['user'].values(),dct[' longitude'].values(), dct[' latitude'].values())], indent=2)+';')
-
+        f.write('var addressPoints = '+json.dumps([[ll,l,u] for u,l,ll in \
+        zip(dct['user'].values(),dct[' longitude'].values(), dct[' latitude'].values())], indent=2)+';')
 
 
 def org_dict_to_geojson(org_location_dict, filename, hashed_usernames = True):
